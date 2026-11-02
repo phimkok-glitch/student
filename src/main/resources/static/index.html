@@ -4,16 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Fun Student</title>
-<style>
-  body { font-family: sans-serif; max-width: 800px; margin: 20px auto; padding: 0 10px; }
-  table { border-collapse: collapse; width: 100%; margin: 10px 0; }
-  th, td { border: 1px solid #aaa; padding: 6px; text-align: left; }
-  input, select { padding: 5px; margin: 3px 3px 3px 0; }
-  button { padding: 5px 10px; margin: 2px; cursor: pointer; }
-  .box { border: 1px solid #ccc; padding: 10px; margin: 10px 0; }
-  .error { color: red; }
-  .hidden { display: none; }
-</style>
+<link rel="stylesheet" href="style.css">
 </head>
 <body>
 
@@ -31,8 +22,8 @@
 
 <!-- ПРИЛОЖЕНИЕ -->
 <div id="appView" class="hidden">
-  <p>Роли: <b id="rolesText"></b> <button onclick="logout()">Выйти</button></p>
-  <div>
+  <p>Роли: <b id="rolesText"></b> <button class="secondary" onclick="logout()">Выйти</button></p>
+  <div id="tabs">
     <button id="tabStudents" onclick="showTab('students')">Студенты</button>
     <button id="tabUsers" onclick="showTab('users')">Пользователи</button>
   </div>
@@ -40,7 +31,6 @@
   <!-- СТУДЕНТЫ -->
   <div id="studentsView">
     <h3>Студенты</h3>
-    <button onclick="loadStudents()">Обновить</button>
     <table>
       <thead><tr><th>ID</th><th>Имя</th><th>Фамилия</th><th>Действия</th></tr></thead>
       <tbody id="studentsBody"></tbody>
@@ -60,7 +50,6 @@
   <!-- ПОЛЬЗОВАТЕЛИ -->
   <div id="usersView" class="hidden">
     <h3>Пользователи</h3>
-    <button onclick="loadUsers()">Обновить</button>
     <table>
       <thead><tr><th>ID</th><th>Email</th><th>Роли</th><th>Действия</th></tr></thead>
       <tbody id="usersBody"></tbody>
@@ -78,6 +67,18 @@
   </div>
 </div>
 
+<!-- ОКНО -->
+<div id="modal" class="overlay hidden">
+  <div class="dialog">
+    <h3 id="mTitle"></h3>
+    <div id="mBody"></div>
+    <div class="dialog-actions">
+      <button id="mCancel" class="secondary">Отмена</button>
+      <button id="mOk">OK</button>
+    </div>
+  </div>
+</div>
+
 <script>
 // Если открываешь index.html не с сервера Spring, поставь тут "http://localhost:8080"
 const API = "";
@@ -91,6 +92,32 @@ const hasRole = r => roles.includes("ROLE_" + r);
 
 function showMsg(text) { $("msg").textContent = text || ""; }
 
+// Окно на странице. Возвращает true (OK) или false (Отмена / Esc / клик мимо)
+function openModal({ title, body, okText = "OK", danger = false }) {
+  return new Promise(resolve => {
+    $("mTitle").textContent = title;
+    $("mBody").innerHTML = body;
+    $("mOk").textContent = okText;
+    $("mOk").className = danger ? "danger" : "";
+    $("modal").classList.remove("hidden");
+    const close = result => {
+      $("modal").classList.add("hidden");
+      document.onkeydown = null;
+      resolve(result);
+    };
+    $("mOk").onclick = () => close(true);
+    $("mCancel").onclick = () => close(false);
+    $("modal").onclick = e => { if (e.target.id === "modal") close(false); };
+    document.onkeydown = e => { if (e.key === "Escape") close(false); };
+    const first = $("mBody").querySelector("input");
+    if (first) first.focus();
+  });
+}
+
+function confirmDelete(text) {
+  return openModal({ title: "Подтверждение", body: "<p>" + esc(text) + "</p>", okText: "Удалить", danger: true });
+}
+
 async function api(method, url, body) {
   showMsg("");
   const headers = { "Content-Type": "application/json" };
@@ -103,7 +130,10 @@ async function api(method, url, body) {
     throw e;
   }
   if (res.status === 401 && token) { logout(); showMsg("Сессия истекла, войдите снова"); throw new Error("401"); }
-  if (res.status === 403) { showMsg("Нет прав на это действие"); throw new Error("403"); }
+  if (res.status === 403) {
+    showMsg(url.includes("/auth/login") ? "Неверный email или пароль" : "Нет прав на это действие");
+    throw new Error("403");
+  }
   const text = await res.text();
   let data = null;
   try { data = text ? JSON.parse(text) : null; } catch (e) { data = text; }
@@ -143,8 +173,7 @@ function openApp() {
 
   const canStudents = hasRole("ADMIN") || hasRole("TEACHER");
   const canUsers = hasRole("SUPER_ADMIN");
-  $("tabStudents").classList.toggle("hidden", !canStudents);
-  $("tabUsers").classList.toggle("hidden", !canUsers);
+  $("tabs").classList.toggle("hidden", !(canStudents && canUsers));
   $("studentForm").classList.toggle("hidden", !hasRole("ADMIN"));
 
   showTab(canStudents ? "students" : "users");
@@ -157,18 +186,21 @@ function showTab(name) {
 }
 
 /* ---------- STUDENTS ---------- */
+let studentsCache = [];
+
 async function loadStudents() {
   $("studentInfo").classList.add("hidden");
   try {
     const data = await api("GET", "/api/v1/student");
     const admin = hasRole("ADMIN");
+    studentsCache = data.response;
     $("studentsBody").innerHTML = data.response.map(s => `
       <tr>
         <td>${s.id}</td><td>${esc(s.name)}</td><td>${esc(s.surname)}</td>
         <td>
           <button onclick="showStudent(${s.id})">Подробнее</button>
           ${admin ? `<button onclick="editStudent(${s.id})">Изменить</button>
-                     <button onclick="deleteStudent(${s.id})">Удалить</button>` : ""}
+                     <button class="danger" onclick="deleteStudent(${s.id})">Удалить</button>` : ""}
         </td>
       </tr>`).join("") || "<tr><td colspan='4'>Пусто</td></tr>";
   } catch (e) {}
@@ -201,17 +233,22 @@ async function createStudent() {
 async function editStudent(id) {
   try {
     const s = await api("GET", "/api/v1/student/" + id);
-    const phone = prompt("Новый телефон:", s.phoneNumber || "");
-    if (phone === null) return;
-    const email = prompt("Новый email:", s.email || "");
-    if (email === null) return;
-    await api("PUT", "/api/v1/student/" + id, { phoneNumber: phone, email: email });
+    const ok = await openModal({
+      title: "Изменить студента: " + s.name + " " + s.surname,
+      body: `<input id="mPhone" placeholder="Телефон" value="${esc(s.phoneNumber || "")}"><br>
+             <input id="mEmail" placeholder="Email" value="${esc(s.email || "")}">`,
+      okText: "Сохранить"
+    });
+    if (!ok) return;
+    await api("PUT", "/api/v1/student/" + id, { phoneNumber: $("mPhone").value, email: $("mEmail").value });
     loadStudents();
   } catch (e) {}
 }
 
 async function deleteStudent(id) {
-  if (!confirm("Удалить студента " + id + "?")) return;
+  const s = studentsCache.find(x => x.id === id);
+  const name = s ? s.name + " " + s.surname : "с ID " + id;
+  if (!(await confirmDelete("Удалить студента " + name + "?"))) return;
   try { await api("DELETE", "/api/v1/student/" + id); loadStudents(); } catch (e) {}
 }
 
@@ -227,7 +264,7 @@ async function loadUsers() {
         <td>${u.id}</td><td>${esc(u.email)}</td><td>${esc(u.roles.join(", "))}</td>
         <td>
           <button onclick="editUser(${u.id})">Роли</button>
-          <button onclick="deleteUser(${u.id})">Удалить</button>
+          <button class="danger" onclick="deleteUser(${u.id})">Удалить</button>
         </td>
       </tr>`).join("") || "<tr><td colspan='4'>Пусто</td></tr>";
   } catch (e) {}
@@ -252,9 +289,16 @@ async function createUser() {
 
 async function editUser(id) {
   const u = usersCache.find(x => x.id === id);
-  const input = prompt("Роли через запятую (SUPER_ADMIN, ADMIN, TEACHER):", u.roles.join(","));
-  if (input === null) return;
-  const newRoles = input.split(",").map(r => r.trim().toUpperCase()).filter(Boolean);
+  const boxes = ["SUPER_ADMIN", "ADMIN", "TEACHER"].map(r =>
+    `<label><input type="checkbox" class="mRole" value="${r}" ${u.roles.includes(r) ? "checked" : ""}>${r}</label>`
+  ).join("<br>");
+  const ok = await openModal({
+    title: "Роли пользователя " + u.email,
+    body: boxes,
+    okText: "Сохранить"
+  });
+  if (!ok) return;
+  const newRoles = [...document.querySelectorAll(".mRole:checked")].map(c => c.value);
   try {
     await api("PUT", "/api/v1/users/" + id, { email: u.email, roles: newRoles });
     loadUsers();
@@ -262,7 +306,8 @@ async function editUser(id) {
 }
 
 async function deleteUser(id) {
-  if (!confirm("Удалить пользователя " + id + "?")) return;
+  const u = usersCache.find(x => x.id === id);
+  if (!(await confirmDelete("Удалить пользователя " + (u ? u.email : id) + "?"))) return;
   try { await api("DELETE", "/api/v1/users/" + id); loadUsers(); } catch (e) {}
 }
 
